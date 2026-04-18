@@ -1,0 +1,4 @@
+<resources>
+    <!-- Compose-only app: no XML theme parent needed -->
+    <style name="Theme.AutovozLoader" />
+</resources>
