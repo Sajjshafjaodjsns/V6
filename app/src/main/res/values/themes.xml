@@ -1,4 +1,3 @@
 <resources>
-    <!-- Compose-only app: no XML theme parent needed -->
-    <style name="Theme.AutovozLoader" />
+    <style name="Theme.AutovozLoader" parent="android:Theme.DeviceDefault.NoActionBar" />
 </resources>
