@@ -23,7 +23,7 @@ class CarSearchService {
 
     companion object {
         // Replace with your key from https://api-ninjas.com/register (free)
-        private const val API_KEY = "YOUR_API_NINJAS_KEY_HERE"
+        private const val API_KEY = "vgWtsxjNGPqAiPyQCOWvVRdSS2cxAIm9aS7TZu7m"
         private const val API_URL = "https://api.api-ninjas.com/v1/cars"
     }
 
