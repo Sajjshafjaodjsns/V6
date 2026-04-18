@@ -113,7 +113,7 @@ fun CarSearchScreen(
                     Spacer(Modifier.width(8.dp))
                     Text("Поиск...", color = androidx.compose.ui.graphics.Color.Black, fontWeight = FontWeight.Bold)
                 } else {
-                    Icon(Icons.Default.CloudSearch, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(8.dp))
                     Text("Найти в интернете", color = androidx.compose.ui.graphics.Color.Black, fontWeight = FontWeight.Bold)
                 }
