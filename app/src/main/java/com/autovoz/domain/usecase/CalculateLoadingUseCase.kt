@@ -1,24 +1,38 @@
-package com.autovoz.domain.usecase
+        package com.autovoz.domain.usecase
 
 import com.autovoz.domain.model.*
 
 /**
- * Greedy heuristic packing algorithm:
- * 1. Sort vehicles: first by height (tall ones must go to lower deck), then by mass desc.
- * 2. Fill lower deck front-to-back, then upper deck front-to-back.
- * 3. Calculate axle loads via lever rule.
+ * CORRECT PHYSICS — lever rule for a car transporter:
+ *
+ * Coordinate system: origin = centre of FRONT axle, positive direction = REARWARD
+ *
+ *   Front axle ──────────────────────────── Rear axle
+ *       0                                   wheelbase (e.g. 4.5m)
+ *              |← frontOverhang →|← platform →|
+ *              platform_start = frontOverhang (e.g. 1.2m behind front axle)
+ *
+ * For each car placed at position X from platform front:
+ *   carCoG_from_frontAxle = frontOverhang + X + carLength/2
+ *
+ * Rear axle cargo load  = Σ( mass_i × dist_i ) / wheelbase
+ * Front axle cargo load = totalCargoMass − rearCargoLoad
+ *
+ * Unladen mass is split according to frontAxleLoadRatio (default 40/60).
+ *
+ * Greedy packing: heavier cars placed FORWARD on lower deck first,
+ * so CoG stays near front axle → balanced distribution.
  */
 class CalculateLoadingUseCase {
 
-    private val GAP = 0.20f  // minimum gap between vehicles, metres
+    private val GAP = 0.20f  // min gap between cars, metres
 
-    fun execute(vehicles: List<CargoVehicle>, settings: TruckSettings): LoadingResult {
+    fun execute(vehicles: List<CargoVehicle>, s: TruckSettings): LoadingResult {
         val warnings = mutableListOf<String>()
 
-        // Sort: vehicles that exceed upper deck height first (must go lower),
-        // then by mass descending (heavier → lower & forward)
+        // Sort: must-be-lower (tall) first, then by mass descending (heavy forward)
         val sorted = vehicles.sortedWith(
-            compareByDescending<CargoVehicle> { it.height > settings.maxHeightUpperDeck }
+            compareByDescending<CargoVehicle> { it.height > s.maxHeightUpperDeck }
                 .thenByDescending { it.mass }
         )
 
@@ -26,41 +40,39 @@ class CalculateLoadingUseCase {
         val upperPlacements = mutableListOf<PlacedVehicle>()
         val unplaced = mutableListOf<CargoVehicle>()
 
-        var lowerFront = 0f
-        var upperFront = 0f
+        var lowerCursor = 0f  // next free position on lower deck
+        var upperCursor = 0f  // next free position on upper deck
 
         for (car in sorted) {
-            val tooTallForUpper = car.height > settings.maxHeightUpperDeck
-            val tooTallForLower = car.height > settings.maxHeightLowerDeck
+            val label = car.name.ifEmpty { "${car.mass} кг" }
+            val tooTallForLower = car.height > s.maxHeightLowerDeck
+            val tooTallForUpper = car.height > s.maxHeightUpperDeck
 
             when {
                 tooTallForLower -> {
-                    warnings.add("${car.name.ifEmpty { "Автомобиль ${car.mass}кг" }}: высота ${car.height}м превышает оба яруса — не размещён.")
-                    unplaced.add(car)
+                    warnings.add("$label: высота ${car.height}м — не помещается ни на один ярус.")
+                    unplaced.add(car); continue
                 }
                 tooTallForUpper -> {
                     // Must go lower deck
-                    val pos = lowerFront
-                    if (pos + car.length <= settings.platformLength) {
-                        lowerPlacements.add(PlacedVehicle(car, Deck.LOWER, pos))
-                        lowerFront = pos + car.length + GAP
+                    if (lowerCursor + car.length <= s.platformLength) {
+                        lowerPlacements += PlacedVehicle(car, Deck.LOWER, lowerCursor)
+                        lowerCursor += car.length + GAP
                     } else {
-                        warnings.add("${car.name.ifEmpty { "Автомобиль ${car.mass}кг" }}: не помещается на нижнем ярусе.")
+                        warnings.add("$label: нижний ярус заполнен — не размещён.")
                         unplaced.add(car)
                     }
                 }
                 else -> {
-                    // Try lower deck first (heavier vehicles prefer lower)
-                    val lowerPos = lowerFront
-                    val upperPos = upperFront
-                    if (lowerPos + car.length <= settings.platformLength) {
-                        lowerPlacements.add(PlacedVehicle(car, Deck.LOWER, lowerPos))
-                        lowerFront = lowerPos + car.length + GAP
-                    } else if (upperPos + car.length <= settings.platformLength) {
-                        upperPlacements.add(PlacedVehicle(car, Deck.UPPER, upperPos))
-                        upperFront = upperPos + car.length + GAP
+                    // Try lower first (heavier cars forward = better balance)
+                    if (lowerCursor + car.length <= s.platformLength) {
+                        lowerPlacements += PlacedVehicle(car, Deck.LOWER, lowerCursor)
+                        lowerCursor += car.length + GAP
+                    } else if (upperCursor + car.length <= s.platformLength) {
+                        upperPlacements += PlacedVehicle(car, Deck.UPPER, upperCursor)
+                        upperCursor += car.length + GAP
                     } else {
-                        warnings.add("${car.name.ifEmpty { "Автомобиль ${car.mass}кг" }}: оба яруса заполнены — не размещён.")
+                        warnings.add("$label: оба яруса заполнены — не размещён.")
                         unplaced.add(car)
                     }
                 }
@@ -69,60 +81,44 @@ class CalculateLoadingUseCase {
 
         val allPlacements = lowerPlacements + upperPlacements
         val cargoMass = allPlacements.sumOf { it.vehicle.mass }
-        val totalMass = settings.unladenMass + cargoMass
+        val totalMass = s.unladenMass + cargoMass
 
-        // Axle load calculation via lever rule
-        // Platform front is at distance (frontOverhang) ahead of front axle
-        // Rear axle is at (frontOverhang + wheelbase) from front of platform (approx)
-        val frontAxleToplatformStart = settings.frontOverhang
-        val rearAxlePos = frontAxleToplatformStart + settings.wheelbase // from platform front
+        // ── Axle loads via lever rule ─────────────────────────────────────────
+        // Each car's CoG distance from front axle (rearward positive):
+        //   = frontOverhang + positionOnPlatform + carLength/2
+        val rearCargoLoad: Float = if (cargoMass == 0) 0f else {
+            allPlacements.sumOf { p ->
+                val distFromFrontAxle = s.frontOverhang + p.positionFromFront + p.vehicle.length / 2.0
+                distFromFrontAxle * p.vehicle.mass
+            }.toFloat() / s.wheelbase
+        }
+        val frontCargoLoad = cargoMass - rearCargoLoad
 
-        // Centre of gravity of all cargo (from platform front)
-        val cargoCog: Float = if (allPlacements.isEmpty()) rearAxlePos
-        else allPlacements.sumOf { p ->
-            val centerPos = p.positionFromFront + p.vehicle.length / 2.0
-            centerPos * p.vehicle.mass
-        }.toFloat() / cargoMass
+        // Unladen loads
+        val unladenFront = s.unladenMass * s.frontAxleLoadRatio
+        val unladenRear  = s.unladenMass * (1f - s.frontAxleLoadRatio)
 
-        // Unladen axle loads
-        val unladenFront = settings.unladenMass * settings.frontAxleLoadRatio
-        val unladenRear = settings.unladenMass * (1f - settings.frontAxleLoadRatio)
+        val frontAxleLoad = unladenFront + frontCargoLoad
+        val rearAxleLoad  = unladenRear  + rearCargoLoad
 
-        // Cargo axle loads via lever rule around front axle
-        // Taking moments around front axle:
-        // rearLoad * wheelbase = cargoMass * (cargoCog - frontAxleToplatformStart + frontAxleToplatformStart)
-        // i.e. position of CoG relative to front axle
-        val cogFromFrontAxle = cargoCog - frontAxleToplatformStart + frontAxleToplatformStart
-        // Actually: platform starts at frontAxleToplatformStart AHEAD of front axle,
-        // so distance from front axle = cargoCog + frontAxleToplatformStart
-        val cogDistFromFrontAxle = cargoCog + frontAxleToplatformStart
-
-        val cargoRearLoad = if (settings.wheelbase > 0)
-            cargoMass * cogDistFromFrontAxle / settings.wheelbase
-        else cargoMass * 0.6f
-
-        val cargoFrontLoad = cargoMass - cargoRearLoad
-
-        val frontAxleLoad = unladenFront + cargoFrontLoad
-        val rearAxleLoad = unladenRear + cargoRearLoad
-
-        if (totalMass > settings.maxTotalMass)
-            warnings.add("⚠ Полная масса ${totalMass} кг превышает допустимые ${settings.maxTotalMass} кг!")
-        if (frontAxleLoad > settings.maxFrontAxleLoad)
-            warnings.add("⚠ Нагрузка на переднюю ось ${frontAxleLoad.toInt()} кг превышает допустимые ${settings.maxFrontAxleLoad} кг!")
-        if (rearAxleLoad > settings.maxRearAxleLoad)
-            warnings.add("⚠ Нагрузка на заднюю тележку ${rearAxleLoad.toInt()} кг превышает допустимые ${settings.maxRearAxleLoad} кг!")
+        // Warnings
+        if (totalMass > s.maxTotalMass)
+            warnings += "⚠ Полная масса ${totalMass} кг > допустимых ${s.maxTotalMass} кг!"
+        if (frontAxleLoad > s.maxFrontAxleLoad)
+            warnings += "⚠ Передняя ось: ${frontAxleLoad.toInt()} кг > ${s.maxFrontAxleLoad} кг!"
+        if (rearAxleLoad > s.maxRearAxleLoad)
+            warnings += "⚠ Задняя тележка: ${rearAxleLoad.toInt()} кг > ${s.maxRearAxleLoad} кг!"
 
         return LoadingResult(
-            placements = allPlacements,
-            totalMass = totalMass,
-            frontAxleLoad = frontAxleLoad,
-            rearAxleLoad = rearAxleLoad,
-            isOverloaded = totalMass > settings.maxTotalMass ||
-                    frontAxleLoad > settings.maxFrontAxleLoad ||
-                    rearAxleLoad > settings.maxRearAxleLoad,
-            warnings = warnings,
-            unplacedVehicles = unplaced
+            placements        = allPlacements,
+            totalMass         = totalMass,
+            frontAxleLoad     = frontAxleLoad,
+            rearAxleLoad      = rearAxleLoad,
+            isOverloaded      = totalMass > s.maxTotalMass
+                    || frontAxleLoad > s.maxFrontAxleLoad
+                    || rearAxleLoad > s.maxRearAxleLoad,
+            warnings          = warnings,
+            unplacedVehicles  = unplaced
         )
     }
 }
