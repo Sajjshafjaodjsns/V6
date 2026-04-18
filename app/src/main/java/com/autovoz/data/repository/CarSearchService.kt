@@ -537,7 +537,7 @@ class CarSearchService {
             //
             // Strategy: send the whole query as "model", and if first word
             // looks like a known brand, split into make+model.
-            val parts = query.trim().split("\s+".toRegex(), limit = 2)
+            val parts = query.trim().split(" ", limit = 2)
             val knownBrands = setOf(
                 "bmw", "audi", "mercedes", "volkswagen", "vw", "toyota",
                 "hyundai", "kia", "honda", "ford", "chevrolet", "nissan",
