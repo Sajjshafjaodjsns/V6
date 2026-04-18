@@ -157,11 +157,30 @@ class CarSearchService {
     private fun searchApi(query: String): SearchResult {
         return try {
             // Parse "Make Model" — API Ninjas wants them separately
-            val parts = query.trim().split(" ", limit = 2)
-            val make = URLEncoder.encode(parts[0], "UTF-8")
-            val model = URLEncoder.encode(parts.getOrElse(1) { "" }, "UTF-8")
-
-            val url = URL("$API_URL?make=$make&model=$model&limit=5")
+            val parts = query.trim().split("\\s+".toRegex(), limit = 2)
+val knownBrands = setOf(
+    "bmw", "audi", "mercedes", "volkswagen", "vw", "toyota",
+    "hyundai", "kia", "honda", "ford", "chevrolet", "nissan",
+    "mazda", "mitsubishi", "skoda", "renault", "peugeot",
+    "lada", "vaz", "haval", "chery", "geely", "lexus",
+    "volvo", "subaru", "suzuki", "seat", "opel", "fiat"
+)
+val firstWord = parts[0].lowercase()
+val (makeParam, modelParam) = if (firstWord in knownBrands && parts.size > 1) {
+    Pair(parts[0], parts[1])
+} else if (firstWord in knownBrands) {
+    Pair(parts[0], "")
+} else {
+    Pair("", query.trim())
+}
+val queryStr = buildString {
+    if (makeParam.isNotEmpty())
+        append("make=${URLEncoder.encode(makeParam, "UTF-8")}&")
+    if (modelParam.isNotEmpty())
+        append("model=${URLEncoder.encode(modelParam, "UTF-8")}&")
+    append("limit=5")
+}
+val url = URL("$API_URL?$queryStr")
             val conn = url.openConnection() as HttpURLConnection
             conn.setRequestProperty("X-Api-Key", API_KEY)
             conn.connectTimeout = 8000
